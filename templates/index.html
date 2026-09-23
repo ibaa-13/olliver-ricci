@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ollivier–Ricci Graph Explorer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Graph Explorer</p>
+        <h1>Ollivier–Ricci Curvature</h1>
+      </div>
+      <div class="shortcut-hint" aria-label="Recalculate shortcut">
+        <kbd>R</kbd><span>recalculate curvature</span>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="panel">
+        <section>
+          <h2>Gestures</h2>
+          <ul class="instructions">
+            <li><strong>Click empty space:</strong> create a vertex.</li>
+            <li><strong>Drag vertex → vertex:</strong> create an edge.</li>
+            <li><strong>Double-click:</strong> select a vertex or edge.</li>
+            <li><strong>Selected vertex + drag:</strong> move it.</li>
+            <li><strong>Drag on empty space:</strong> box-select elements.</li>
+            <li><strong>Ctrl/Shift + box:</strong> add to the selection.</li>
+            <li><strong>Delete / Backspace:</strong> delete the selection.</li>
+            <li><strong>Esc:</strong> clear the selection.</li>
+            <li><strong>R:</strong> recalculate curvature and colors.</li>
+          </ul>
+        </section>
+
+        <section class="preset-block" aria-labelledby="preset-heading">
+          <div class="section-heading">
+            <h2 id="preset-heading">Known graphs</h2>
+            <span>Load with one click</span>
+          </div>
+          <div id="preset-list" class="preset-list" aria-label="Preset graph collection"></div>
+        </section>
+
+        <label class="alpha-control">
+          <span>Ollivier–Ricci α</span>
+          <input id="alpha" type="number" min="0" max="1" step="0.05" value="0.5" />
+        </label>
+
+        <div class="legend-block">
+          <h2>Curvature</h2>
+          <div class="gradient"></div>
+          <div class="legend-labels">
+            <span>negative</span><span>0</span><span>positive</span>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div><span>Vertices</span><strong id="node-count">0</strong></div>
+          <div><span>Edges</span><strong id="edge-count">0</strong></div>
+          <div><span>Min.</span><strong id="min-curvature">—</strong></div>
+          <div><span>Max.</span><strong id="max-curvature">—</strong></div>
+        </div>
+
+        <p id="status" class="status" aria-live="polite">Ready.</p>
+
+        <div class="json-block">
+          <div class="json-heading">
+            <h2>Graph JSON</h2>
+            <span>Export by copying · import by pasting + <kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
+          </div>
+          <textarea id="graph-json" spellcheck="false" aria-label="Graph JSON"></textarea>
+          <p id="json-status" class="json-status" aria-live="polite">No pending changes.</p>
+        </div>
+      </aside>
+
+      <div class="graph-wrap">
+        <div id="cy" aria-label="Interactive graph visualizer"></div>
+        <div id="selection-box" class="selection-box" hidden></div>
+        <svg id="edge-preview" class="edge-preview" aria-hidden="true" hidden>
+          <line id="edge-preview-line" x1="0" y1="0" x2="0" y2="0"></line>
+        </svg>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.34.3/dist/cytoscape.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
