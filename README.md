@@ -5,13 +5,25 @@ A local web application for creating and editing graphs and computing Ollivier�
 ## Install and run
 
 ```bash
-conda create -n ricci python=3.12
-conda activate ricci
 pip install -r requirements.txt
 python main.py
 ```
 
 Open `http://127.0.0.1:5000`.
+
+## Ollivier-Ricci curvature
+
+For an edge between vertices x and y, the application computes:
+
+κ(x, y) = 1 - W₁(mₓ, mᵧ) / d(x, y)
+
+where:
+
+W₁ is the Wasserstein-1 distance
+mₓ and mᵧ are probability distributions around the two vertices
+d(x, y) is the graph distance between them
+
+The Wasserstein distance is computed using linear programming with SciPy.
 
 ## Gestures
 
