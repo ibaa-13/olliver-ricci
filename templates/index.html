@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ollivier–Ricci Graph Explorer</title>
+  <title>Discrete Curvature Graph Explorer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
 </head>
 <body>
@@ -11,10 +11,26 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">Graph Explorer</p>
-        <h1>Ollivier–Ricci Curvature</h1>
+
+        <div class="curvature-selector">
+          <button
+            id="curvature-title"
+            class="curvature-title"
+            type="button"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="curvature-menu"
+          >
+            <span id="curvature-title-text">Ollivier-Ricci Curvature</span>
+            <span class="curvature-arrow" aria-hidden="true">▾</span>
+          </button>
+
+          <div id="curvature-menu" class="curvature-menu" role="menu" hidden></div>
+        </div>
       </div>
+
       <div class="shortcut-hint" aria-label="Recalculate shortcut">
-        <kbd>R</kbd><span>recalculate curvature</span>
+        <kbd>R</kbd><span>recalculate selected curvature</span>
       </div>
     </header>
 
@@ -31,7 +47,7 @@
             <li><strong>Ctrl/Shift + box:</strong> add to the selection.</li>
             <li><strong>Delete / Backspace:</strong> delete the selection.</li>
             <li><strong>Esc:</strong> clear the selection.</li>
-            <li><strong>R:</strong> recalculate curvature and colors.</li>
+            <li><strong>R:</strong> compute the selected curvature.</li>
           </ul>
         </section>
 
@@ -43,13 +59,17 @@
           <div id="preset-list" class="preset-list" aria-label="Preset graph collection"></div>
         </section>
 
-        <label class="alpha-control">
-          <span>Ollivier–Ricci α</span>
-          <input id="alpha" type="number" min="0" max="1" step="0.05" value="0.5" />
-        </label>
+        <section class="curvature-settings" aria-labelledby="curvature-settings-heading">
+          <div class="section-heading">
+            <h2 id="curvature-settings-heading">Curvature settings</h2>
+            <span id="curvature-target-label">Edges</span>
+          </div>
+          <p id="curvature-description" class="curvature-description"></p>
+          <div id="curvature-parameters" class="curvature-parameters"></div>
+        </section>
 
         <div class="legend-block">
-          <h2>Curvature</h2>
+          <h2 id="legend-title">Curvature on edges</h2>
           <div class="gradient"></div>
           <div class="legend-labels">
             <span>negative</span><span>0</span><span>positive</span>

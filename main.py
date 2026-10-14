@@ -4,99 +4,15 @@ import os
 from typing import Any
 
 import networkx as nx
-import numpy as np
 from flask import Flask, jsonify, render_template, request
-from scipy.optimize import linprog
+
+from curvatures import get_method, public_catalog
 
 app = Flask(__name__)
 
 MAX_NODES = 200
 MAX_EDGES = 1000
-
-
-def wasserstein_distance(mu: np.ndarray, nu: np.ndarray, cost_matrix: np.ndarray) -> float:
-    """Compute the Wasserstein-1 distance using a linear program."""
-    n = len(mu)
-    m = len(nu)
-    c = cost_matrix.flatten()
-
-    a_eq = []
-    b_eq = []
-
-    #restricciones
-    for i in range(n):
-        row = np.zeros(n * m)
-        for j in range(m):
-            row[i * m + j] = 1.0
-        a_eq.append(row)
-        b_eq.append(mu[i])
-
-    for j in range(m):
-        row = np.zeros(n * m)
-        for i in range(n):
-            row[i * m + j] = 1.0
-        a_eq.append(row)
-        b_eq.append(nu[j])
-
-    result = linprog(
-        c,
-        A_eq=np.asarray(a_eq),
-        b_eq=np.asarray(b_eq),
-        bounds=[(0, None)] * (n * m),
-        method="highs",
-    )
-
-    if not result.success:
-        raise RuntimeError(f"Optimal transport could not be solved: {result.message}")
-
-    return float(result.fun)
-
-
-def probability_measure(graph: nx.Graph, node: str, alpha: float) -> tuple[list[str], np.ndarray]:
-    """Build the lazy random-walk probability measure around one vertex."""
-    neighbors = list(graph.neighbors(node))
-    support = [node] + neighbors
-    probabilities = np.zeros(len(support), dtype=float)
-    probabilities[0] = alpha
-
-    if neighbors:
-        probabilities[1:] = (1.0 - alpha) / len(neighbors)
-    else:
-        probabilities[0] = 1.0
-
-    return support, probabilities
-
-
-def compute_ollivier_ricci(graph: nx.Graph, alpha: float = 0.5) -> dict[tuple[str, str], float]:
-    """Compute Ollivier-Ricci curvature for every edge of an unweighted graph."""
-    if graph.number_of_edges() == 0:
-        return {}
-
-    all_distances = dict(nx.all_pairs_shortest_path_length(graph))
-    curvatures: dict[tuple[str, str], float] = {}
-
-    for u, v in graph.edges():
-        support_u, mu = probability_measure(graph, u, alpha)
-        support_v, nu = probability_measure(graph, v, alpha)
-
-        cost_matrix = np.zeros((len(support_u), len(support_v)), dtype=float)
-        for i, node_u in enumerate(support_u):
-            for j, node_v in enumerate(support_v):
-                distance = all_distances[node_u].get(node_v)
-                if distance is None:
-                    raise RuntimeError(f"No path exists between {node_u} and {node_v}.")
-                cost_matrix[i, j] = float(distance)
-
-        wasserstein = wasserstein_distance(mu, nu, cost_matrix)
-        d_uv = float(all_distances[u][v])
-        curvature = 1.0 - (wasserstein / d_uv)
-
-        if abs(curvature) < 1e-12:
-            curvature = 0.0
-
-        curvatures[(u, v)] = float(curvature)
-
-    return curvatures
+VALID_TARGETS = {"edges", "nodes", "graph"}
 
 
 @app.get("/")
@@ -104,38 +20,35 @@ def index():
     return render_template("index.html")
 
 
-@app.post("/api/curvature")
-def curvature():
-    payload: dict[str, Any] = request.get_json(silent=True) or {}
-    nodes = payload.get("nodes", [])
-    edges = payload.get("edges", [])
-    alpha = payload.get("alpha", 0.5)
+@app.get("/api/curvatures")
+def curvature_catalog():
+    """Expose curvature metadata used to build the selector and parameter UI."""
+    return jsonify({"curvatures": public_catalog()})
 
-    if not isinstance(nodes, list) or not isinstance(edges, list):
-        return jsonify({"error": "nodes and edges must be arrays."}), 400
 
+def _build_graph(
+    nodes: list[Any],
+    edges: list[Any],
+) -> tuple[nx.Graph, list[tuple[str, str, str]]]:
+    """Validate the JSON graph and convert it to NetworkX."""
     if len(nodes) > MAX_NODES or len(edges) > MAX_EDGES:
-        return jsonify({
-            "error": f"Maximum size: {MAX_NODES} vertices and {MAX_EDGES} edges."
-        }), 400
-
-    try:
-        alpha = float(alpha)
-    except (TypeError, ValueError):
-        return jsonify({"error": "alpha must be a number."}), 400
-
-    if not 0.0 <= alpha <= 1.0:
-        return jsonify({"error": "alpha must be between 0 and 1."}), 400
+        raise ValueError(
+            f"Maximum size: {MAX_NODES} vertices and {MAX_EDGES} edges."
+        )
 
     graph = nx.Graph()
     node_ids: set[str] = set()
 
     for raw_node in nodes:
-        node_id = str(raw_node.get("id", "") if isinstance(raw_node, dict) else raw_node).strip()
+        node_id = str(
+            raw_node.get("id", "") if isinstance(raw_node, dict) else raw_node
+        ).strip()
+
         if not node_id:
-            return jsonify({"error": "Every vertex must have an id."}), 400
+            raise ValueError("Every vertex must have an id.")
         if node_id in node_ids:
-            return jsonify({"error": f"Duplicate vertex: {node_id}"}), 400
+            raise ValueError(f"Duplicate vertex: {node_id}")
+
         node_ids.add(node_id)
         graph.add_node(node_id)
 
@@ -144,67 +57,184 @@ def curvature():
 
     for index, edge in enumerate(edges):
         if not isinstance(edge, dict):
-            return jsonify({"error": "Every edge must be an object."}), 400
+            raise ValueError("Every edge must be an object.")
 
         source = str(edge.get("source", "")).strip()
         target = str(edge.get("target", "")).strip()
         edge_id = str(edge.get("id", f"e{index}"))
 
         if source not in node_ids or target not in node_ids:
-            return jsonify({"error": f"Edge {edge_id} references a missing vertex."}), 400
+            raise ValueError(f"Edge {edge_id} references a missing vertex.")
         if source == target:
-            return jsonify({"error": "Self-loops are not supported."}), 400
+            raise ValueError("Self-loops are not supported.")
 
         pair = tuple(sorted((source, target)))
         if pair in seen_pairs:
-            return jsonify({"error": f"Duplicate edge between {source} and {target}."}), 400
+            raise ValueError(f"Duplicate edge between {source} and {target}.")
 
         seen_pairs.add(pair)
-        graph.add_edge(source, target)
+        graph.add_edge(source, target, edge_id=edge_id)
         normalized_edges.append((edge_id, source, target))
 
-    if graph.number_of_edges() == 0:
-        return jsonify({
-            "edges": [],
-            "stats": {"min": 0.0, "max": 0.0, "max_abs": 1.0},
-            "alpha": alpha,
-        })
+    return graph, normalized_edges
+
+
+def _parse_parameters(
+    method: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate parameters declared by the selected curvature method."""
+    supplied = payload.get("parameters", {})
+    if supplied is None:
+        supplied = {}
+    if not isinstance(supplied, dict):
+        raise ValueError("parameters must be an object.")
+
+    parsed: dict[str, Any] = {}
+
+    for spec in method.get("parameters", []):
+        parameter_id = str(spec["id"])
+
+        # Backward compatibility with the previous API, where alpha lived at
+        # the top level of the request.
+        if parameter_id in supplied:
+            raw_value = supplied[parameter_id]
+        elif parameter_id in payload:
+            raw_value = payload[parameter_id]
+        else:
+            raw_value = spec.get("default")
+
+        parameter_type = spec.get("type", "number")
+
+        if parameter_type == "number":
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{spec.get('label', parameter_id)} must be a number.") from exc
+
+            minimum = spec.get("min")
+            maximum = spec.get("max")
+            if minimum is not None and value < float(minimum):
+                raise ValueError(f"{spec.get('label', parameter_id)} must be at least {minimum}.")
+            if maximum is not None and value > float(maximum):
+                raise ValueError(f"{spec.get('label', parameter_id)} must be at most {maximum}.")
+
+            parsed[parameter_id] = value
+        else:
+            # Add parsing for future parameter types here, for example:
+            # "integer", "boolean", "select", ...
+            parsed[parameter_id] = raw_value
+
+    return parsed
+
+
+def _serialize_result(
+    target: str,
+    raw_values: Any,
+    graph: nx.Graph,
+    normalized_edges: list[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    """Convert a method-specific Python result into the generic browser format."""
+    if target == "edges":
+        if not isinstance(raw_values, dict):
+            raise TypeError("Edge curvature functions must return a dictionary.")
+
+        result: list[dict[str, Any]] = []
+        for edge_id, source, target_node in normalized_edges:
+            value = raw_values.get(
+                (source, target_node),
+                raw_values.get((target_node, source)),
+            )
+            if value is None:
+                continue
+            result.append({"id": edge_id, "value": float(value)})
+        return result
+
+    if target == "nodes":
+        if not isinstance(raw_values, dict):
+            raise TypeError("Node curvature functions must return a dictionary.")
+
+        result = []
+        for node_id in graph.nodes():
+            value = raw_values.get(node_id)
+            if value is None:
+                continue
+            result.append({"id": str(node_id), "value": float(value)})
+        return result
+
+    if target == "graph":
+        if isinstance(raw_values, dict):
+            return [
+                {"id": str(name), "value": float(value)}
+                for name, value in raw_values.items()
+            ]
+        return [{"id": "graph", "value": float(raw_values)}]
+
+    raise ValueError(f"Unsupported curvature target: {target}")
+
+
+def _stats(values: list[dict[str, Any]]) -> dict[str, float]:
+    numbers = [float(item["value"]) for item in values]
+    if not numbers:
+        return {"min": 0.0, "max": 0.0, "max_abs": 1.0}
+
+    minimum = min(numbers)
+    maximum = max(numbers)
+    return {
+        "min": minimum,
+        "max": maximum,
+        "max_abs": max(abs(minimum), abs(maximum), 1e-12),
+    }
+
+
+@app.post("/api/curvature")
+def curvature():
+    payload: dict[str, Any] = request.get_json(silent=True) or {}
+    nodes = payload.get("nodes", [])
+    edges = payload.get("edges", [])
+    method_id = str(payload.get("curvature", "ollivier"))
+
+    if not isinstance(nodes, list) or not isinstance(edges, list):
+        return jsonify({"error": "nodes and edges must be arrays."}), 400
+
+    method = get_method(method_id)
+    if method is None:
+        return jsonify({"error": f"Unknown curvature method: {method_id}"}), 400
+    if not method.get("available", False) or method.get("compute") is None:
+        return jsonify({"error": f"{method['name']} is not implemented yet."}), 400
+
+    target = str(method.get("target", ""))
+    if target not in VALID_TARGETS:
+        return jsonify({"error": f"Invalid target configured for {method['name']}."}), 500
 
     try:
-        curvatures = compute_ollivier_ricci(graph, alpha)
+        graph, normalized_edges = _build_graph(nodes, edges)
+        parameters = _parse_parameters(method, payload)
+        raw_values = method["compute"](graph, **parameters)
+        values = _serialize_result(target, raw_values, graph, normalized_edges)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as exc:
-        app.logger.exception("Error computing Ollivier-Ricci curvature")
+        app.logger.exception("Error computing %s", method["name"])
         return jsonify({
-            "error": "Ollivier-Ricci curvature could not be computed.",
+            "error": f"{method['name']} could not be computed.",
             "detail": str(exc),
         }), 500
 
-    result_edges = []
-    values = []
-
-    for edge_id, source, target in normalized_edges:
-        value = curvatures.get((source, target), curvatures.get((target, source), 0.0))
-        value = float(value)
-        values.append(value)
-        result_edges.append({
-            "id": edge_id,
-            "source": source,
-            "target": target,
-            "curvature": value,
-        })
-
-    min_value = min(values)
-    max_value = max(values)
-    max_abs = max(abs(min_value), abs(max_value), 1e-12)
-
     return jsonify({
-        "edges": result_edges,
-        "stats": {"min": min_value, "max": max_value, "max_abs": max_abs},
-        "alpha": alpha,
+        "curvature": {
+            "id": method["id"],
+            "name": method["name"],
+            "target": target,
+        },
+        "parameters": parameters,
+        "values": values,
+        "stats": _stats(values),
     })
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"Open http://127.0.0.1:{port}")
-    app.run(host="127.0.0.1", port=port, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)

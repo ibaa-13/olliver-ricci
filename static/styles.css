@@ -134,3 +134,115 @@ h2 { margin: 0 0 12px; font-size: 14px; }
   #graph-json { min-height: 160px; }
   .preset-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Curvature selector ------------------------------------------------------ */
+.curvature-selector {
+  position: relative;
+  display: inline-block;
+  min-width: 0;
+}
+
+.curvature-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: clamp(24px, 3vw, 38px);
+  font-weight: 800;
+  letter-spacing: -.04em;
+  text-align: left;
+  cursor: pointer;
+}
+
+.curvature-title:hover { color: #334155; }
+.curvature-title:focus-visible {
+  outline: 3px solid #bfdbfe;
+  outline-offset: 5px;
+  border-radius: 6px;
+}
+
+.curvature-arrow {
+  flex: 0 0 auto;
+  font-size: .55em;
+  transition: transform 140ms ease;
+}
+
+.curvature-title[aria-expanded="true"] .curvature-arrow {
+  transform: rotate(180deg);
+}
+
+.curvature-menu {
+  position: absolute;
+  z-index: 1000;
+  top: calc(100% + 10px);
+  left: 0;
+  width: min(360px, calc(100vw - 28px));
+  padding: 6px;
+  border: 1px solid #dbe3ee;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, .16);
+}
+.curvature-menu[hidden] { display: none; }
+
+.curvature-option {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+.curvature-option:hover:not(:disabled) { background: #f8fafc; }
+.curvature-option.active { background: #eff6ff; }
+.curvature-option:focus-visible { outline: 3px solid #bfdbfe; outline-offset: -1px; }
+.curvature-option:disabled { cursor: default; opacity: .5; }
+.curvature-option-main { display: grid; gap: 2px; min-width: 0; }
+.curvature-option-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.curvature-option-main small { color: #64748b; font-size: 10px; }
+.coming-soon {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+/* Method-specific settings ----------------------------------------------- */
+.curvature-settings { margin-top: 22px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+.curvature-description { margin: 0 0 12px; color: #64748b; font-size: 11px; line-height: 1.45; }
+.curvature-parameters { display: grid; gap: 10px; }
+.parameter-control { display: grid; gap: 6px; color: #334155; font-size: 12px; font-weight: 800; }
+.parameter-control input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 7px 9px;
+  background: white;
+  color: #0f172a;
+}
+.parameter-control input:focus { outline: 3px solid #bfdbfe; border-color: #2563eb; }
+.parameter-control small { color: #64748b; font-size: 10px; font-weight: 500; line-height: 1.4; }
+.no-parameters { margin: 0; color: #64748b; font-size: 11px; }
+
+@media (max-width: 520px) {
+  .curvature-title { font-size: 25px; }
+  .curvature-menu { width: min(330px, calc(100vw - 28px)); }
+}

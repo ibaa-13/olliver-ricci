@@ -1,7 +1,6 @@
 (() => {
   const cyContainer = document.getElementById('cy');
   const statusEl = document.getElementById('status');
-  const alphaInput = document.getElementById('alpha');
   const nodeCountEl = document.getElementById('node-count');
   const edgeCountEl = document.getElementById('edge-count');
   const minEl = document.getElementById('min-curvature');
@@ -13,16 +12,72 @@
   const jsonStatusEl = document.getElementById('json-status');
   const presetListEl = document.getElementById('preset-list');
 
+  const curvatureTitle = document.getElementById('curvature-title');
+  const curvatureTitleText = document.getElementById('curvature-title-text');
+  const curvatureMenu = document.getElementById('curvature-menu');
+  const curvatureParametersEl = document.getElementById('curvature-parameters');
+  const curvatureDescriptionEl = document.getElementById('curvature-description');
+  const curvatureTargetLabelEl = document.getElementById('curvature-target-label');
+  const legendTitleEl = document.getElementById('legend-title');
+
   const DRAG_THRESHOLD = 6;
   const NODE_HIT_PADDING = 9;
   const EDGE_HIT_DISTANCE = 9;
   const DOUBLE_CLICK_MS = 350;
+
+  // Fallback metadata keeps the UI usable if the catalogue request fails.
+  // The authoritative catalogue comes from curvatures/registry.py.
+  const FALLBACK_CURVATURES = [
+    {
+      id: 'ollivier',
+      name: 'Ollivier-Ricci Curvature',
+      short_name: 'Ollivier-Ricci',
+      target: 'edges',
+      description: 'Optimal-transport curvature defined on graph edges.',
+      available: true,
+      parameters: [
+        {
+          id: 'alpha',
+          label: 'Idleness α',
+          type: 'number',
+          default: 0.5,
+          min: 0,
+          max: 1,
+          step: 0.05,
+          help: 'Probability mass kept at the current vertex.',
+        },
+      ],
+    },
+    {
+      id: 'forman',
+      name: 'Forman-Ricci Curvature',
+      short_name: 'Forman-Ricci',
+      target: 'edges',
+      description: 'Edge-based curvature placeholder for a future implementation.',
+      available: false,
+      parameters: [],
+    },
+    {
+      id: 'vertex-template',
+      name: 'Vertex Curvature',
+      short_name: 'Vertex curvature',
+      target: 'nodes',
+      description: 'Example node-based curvature placeholder.',
+      available: false,
+      parameters: [],
+    },
+  ];
 
   let nodeCounter = 0;
   let edgeCounter = 0;
   let gesture = null;
   let lastElementTap = { id: null, group: null, time: 0 };
   let jsonDirty = false;
+
+  let curvatureCatalog = [...FALLBACK_CURVATURES];
+  let selectedCurvature = 'ollivier';
+  let graphCurvatureValues = [];
+  const parameterState = new Map();
 
   const cy = cytoscape({
     container: cyContainer,
@@ -94,6 +149,279 @@
     nodeCountEl.textContent = String(cy.nodes().length);
     edgeCountEl.textContent = String(cy.edges().length);
   }
+
+  function getMethod(methodId = selectedCurvature) {
+    return curvatureCatalog.find((method) => method.id === methodId) || null;
+  }
+
+  function selectedMethod() {
+    return getMethod(selectedCurvature) || FALLBACK_CURVATURES[0];
+  }
+
+  function targetLabel(target) {
+    if (target === 'edges') return 'Edges';
+    if (target === 'nodes') return 'Vertices';
+    if (target === 'graph') return 'Graph';
+    return target;
+  }
+
+  function parameterDefaults(method) {
+    const values = {};
+    (method.parameters || []).forEach((spec) => {
+      values[spec.id] = spec.default;
+    });
+    return values;
+  }
+
+  function validateParameters(method, parameters) {
+    const parsed = {};
+
+    (method.parameters || []).forEach((spec) => {
+      const raw = parameters[spec.id] ?? spec.default;
+
+      if ((spec.type || 'number') === 'number') {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) {
+          throw new Error(`${spec.label || spec.id} must be a number.`);
+        }
+        if (spec.min !== undefined && value < Number(spec.min)) {
+          throw new Error(`${spec.label || spec.id} must be at least ${spec.min}.`);
+        }
+        if (spec.max !== undefined && value > Number(spec.max)) {
+          throw new Error(`${spec.label || spec.id} must be at most ${spec.max}.`);
+        }
+        parsed[spec.id] = value;
+        return;
+      }
+
+      // Add parsing for future parameter types here if needed.
+      parsed[spec.id] = raw;
+    });
+
+    return parsed;
+  }
+
+  function readParameterControls() {
+    const method = selectedMethod();
+    const values = {};
+
+    (method.parameters || []).forEach((spec) => {
+      const input = curvatureParametersEl.querySelector(`[data-parameter-id="${CSS.escape(spec.id)}"]`);
+      if (!input) return;
+      values[spec.id] = spec.type === 'number' ? Number(input.value) : input.value;
+    });
+
+    return validateParameters(method, values);
+  }
+
+  function rememberCurrentParameters() {
+    try {
+      parameterState.set(selectedCurvature, readParameterControls());
+    } catch (_) {
+      // Invalid user input is intentionally not persisted as method state.
+    }
+  }
+
+  function renderParameterControls(method, suppliedValues = null) {
+    curvatureParametersEl.replaceChildren();
+
+    const previous = suppliedValues
+      || parameterState.get(method.id)
+      || parameterDefaults(method);
+
+    if (!(method.parameters || []).length) {
+      const empty = document.createElement('p');
+      empty.className = 'no-parameters';
+      empty.textContent = 'No parameters for this curvature.';
+      curvatureParametersEl.appendChild(empty);
+      parameterState.set(method.id, {});
+      return;
+    }
+
+    (method.parameters || []).forEach((spec) => {
+      const label = document.createElement('label');
+      label.className = 'parameter-control';
+
+      const labelText = document.createElement('span');
+      labelText.className = 'parameter-label';
+      labelText.textContent = spec.label || spec.id;
+      label.appendChild(labelText);
+
+      let input;
+      if ((spec.type || 'number') === 'number') {
+        input = document.createElement('input');
+        input.type = 'number';
+        if (spec.min !== undefined) input.min = String(spec.min);
+        if (spec.max !== undefined) input.max = String(spec.max);
+        if (spec.step !== undefined) input.step = String(spec.step);
+      } else {
+        // Future parameter types can be rendered here.
+        input = document.createElement('input');
+        input.type = 'text';
+      }
+
+      input.dataset.parameterId = spec.id;
+      const value = previous[spec.id] ?? spec.default ?? '';
+      input.value = String(value);
+      label.appendChild(input);
+
+      if (spec.help) {
+        const help = document.createElement('small');
+        help.textContent = spec.help;
+        label.appendChild(help);
+      }
+
+      input.addEventListener('change', () => {
+        try {
+          const parameters = readParameterControls();
+          parameterState.set(method.id, parameters);
+          invalidateCurvature(`${method.short_name || method.name} parameters changed. Press R to recalculate.`);
+          syncJsonFromGraph();
+        } catch (error) {
+          setStatus(error.message, 'error');
+        }
+      });
+
+      curvatureParametersEl.appendChild(label);
+    });
+
+    try {
+      parameterState.set(method.id, validateParameters(method, previous));
+    } catch (_) {
+      parameterState.set(method.id, parameterDefaults(method));
+    }
+  }
+
+  function renderCurvatureMenu() {
+    curvatureMenu.replaceChildren();
+
+    curvatureCatalog.forEach((method) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'curvature-option';
+      button.setAttribute('role', 'menuitem');
+      button.dataset.curvature = method.id;
+      button.disabled = !method.available;
+
+      const content = document.createElement('span');
+      content.className = 'curvature-option-main';
+
+      const name = document.createElement('strong');
+      name.textContent = method.short_name || method.name;
+      content.appendChild(name);
+
+      const target = document.createElement('small');
+      target.textContent = targetLabel(method.target);
+      content.appendChild(target);
+      button.appendChild(content);
+
+      if (!method.available) {
+        const badge = document.createElement('span');
+        badge.className = 'coming-soon';
+        badge.textContent = 'Coming soon';
+        button.appendChild(badge);
+      }
+
+      if (method.id === selectedCurvature) button.classList.add('active');
+
+      button.addEventListener('click', () => {
+        if (!method.available) return;
+        selectCurvature(method.id);
+      });
+
+      curvatureMenu.appendChild(button);
+    });
+  }
+
+  function updateCurvatureUi(method) {
+    curvatureTitleText.textContent = method.name;
+    curvatureDescriptionEl.textContent = method.description || '';
+    curvatureTargetLabelEl.textContent = targetLabel(method.target);
+    legendTitleEl.textContent = method.target === 'graph'
+      ? 'Graph-level curvature'
+      : `Curvature on ${method.target}`;
+    renderCurvatureMenu();
+  }
+
+  function openCurvatureMenu() {
+    curvatureMenu.hidden = false;
+    curvatureTitle.setAttribute('aria-expanded', 'true');
+  }
+
+  function closeCurvatureMenu() {
+    curvatureMenu.hidden = true;
+    curvatureTitle.setAttribute('aria-expanded', 'false');
+  }
+
+  function selectCurvature(methodId, options = {}) {
+    const {
+      invalidate = true,
+      parameters = null,
+      syncJson = true,
+      announce = true,
+    } = options;
+
+    const method = getMethod(methodId);
+    if (!method || !method.available) return false;
+
+    if (methodId !== selectedCurvature) rememberCurrentParameters();
+    selectedCurvature = methodId;
+
+    if (parameters) parameterState.set(method.id, validateParameters(method, parameters));
+
+    updateCurvatureUi(method);
+    renderParameterControls(method, parameters);
+    closeCurvatureMenu();
+
+    if (invalidate) {
+      invalidateCurvature(`${method.short_name || method.name} selected. Press R to calculate.`);
+    } else {
+      resetCurvatureStyles();
+      applyCurvatureStyles(method.target);
+    }
+
+    if (syncJson) syncJsonFromGraph();
+    if (announce && !invalidate) setStatus(`${method.name} selected.`);
+    return true;
+  }
+
+  async function loadCurvatureCatalog() {
+    try {
+      const response = await fetch('/api/curvatures');
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data.curvatures)) {
+        throw new Error(data.error || 'Invalid curvature catalogue.');
+      }
+      curvatureCatalog = data.curvatures;
+    } catch (error) {
+      curvatureCatalog = [...FALLBACK_CURVATURES];
+      setStatus(`Could not load the curvature catalogue; using fallback metadata. ${error.message}`, 'error');
+    }
+
+    const chosen = getMethod(selectedCurvature)?.available
+      ? selectedCurvature
+      : curvatureCatalog.find((method) => method.available)?.id;
+
+    if (!chosen) {
+      throw new Error('No curvature method is available.');
+    }
+
+    selectCurvature(chosen, {
+      invalidate: false,
+      syncJson: false,
+      announce: false,
+    });
+  }
+
+  curvatureTitle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (curvatureMenu.hidden) openCurvatureMenu();
+    else closeCurvatureMenu();
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.curvature-selector')) closeCurvatureMenu();
+  });
 
   function nextNodeId() {
     do {
@@ -260,7 +588,6 @@
         id: nextEdgeId(),
         source: sourceId,
         target: targetId,
-        curvature: null,
       },
     });
 
@@ -284,17 +611,22 @@
     syncJsonFromGraph();
   }
 
+  function resetCurvatureStyles() {
+    // removeStyle() clears only per-element overrides; the Cytoscape stylesheet
+    // (including the selection styles) remains active.
+    cy.nodes().removeStyle();
+    cy.edges().removeStyle();
+  }
+
+  function clearCurvatureData() {
+    cy.nodes().forEach((node) => node.removeData('curvature'));
+    cy.edges().forEach((edge) => edge.removeData('curvature'));
+    graphCurvatureValues = [];
+  }
+
   function invalidateCurvature(message = 'The graph changed. Press R to recalculate.') {
-    cy.edges().forEach((edge) => {
-      edge.data('curvature', null);
-      edge.style({
-        'line-color': '#94a3b8',
-        'label': '',
-        'font-size': 11,
-        'color': '#334155',
-        'text-background-opacity': 0,
-      });
-    });
+    clearCurvatureData();
+    resetCurvatureStyles();
     minEl.textContent = '—';
     maxEl.textContent = '—';
     setStatus(message);
@@ -315,34 +647,36 @@
     return `rgb(${rgb.join(',')})`;
   }
 
-  function applyCurvatureStyles() {
-    const values = cy.edges()
-      .map((edge) => {
-        const raw = edge.data('curvature');
+  function finiteCurvatureValues(collection) {
+    return collection
+      .map((element) => {
+        const raw = element.data('curvature');
         return raw === null || raw === undefined ? NaN : Number(raw);
       })
       .filter((value) => Number.isFinite(value));
+  }
 
+  function updateCurvatureStats(values) {
     if (!values.length) {
       minEl.textContent = '—';
       maxEl.textContent = '—';
-      cy.edges().forEach((edge) => {
-        edge.style({ 'line-color': '#94a3b8', 'label': '' });
-      });
-      return;
+      return 1;
     }
 
     const minValue = Math.min(...values);
     const maxValue = Math.max(...values);
-    const maxAbs = Math.max(Math.abs(minValue), Math.abs(maxValue), 1e-12);
+    minEl.textContent = minValue.toFixed(3);
+    maxEl.textContent = maxValue.toFixed(3);
+    return Math.max(Math.abs(minValue), Math.abs(maxValue), 1e-12);
+  }
+
+  function applyEdgeCurvatureStyles() {
+    const values = finiteCurvatureValues(cy.edges());
+    const maxAbs = updateCurvatureStats(values);
 
     cy.edges().forEach((edge) => {
-      const raw = edge.data('curvature');
-      const value = raw === null || raw === undefined ? NaN : Number(raw);
-      if (!Number.isFinite(value)) {
-        edge.style({ 'line-color': '#94a3b8', 'label': '' });
-        return;
-      }
+      const value = Number(edge.data('curvature'));
+      if (!Number.isFinite(value)) return;
       edge.style({
         'line-color': curvatureColor(value, maxAbs),
         'label': value.toFixed(3),
@@ -353,25 +687,113 @@
         'text-background-padding': 3,
       });
     });
-
-    minEl.textContent = minValue.toFixed(3);
-    maxEl.textContent = maxValue.toFixed(3);
   }
 
-  async function updateCurvature() {
-    if (!cy.edges().length) {
-      setStatus('Add at least one edge before calculating.', 'error');
+  function applyNodeCurvatureStyles() {
+    const values = finiteCurvatureValues(cy.nodes());
+    const maxAbs = updateCurvatureStats(values);
+
+    cy.nodes().forEach((node) => {
+      const value = Number(node.data('curvature'));
+      if (!Number.isFinite(value)) return;
+      const baseLabel = String(node.data('label') ?? node.id());
+      node.style({
+        'background-color': curvatureColor(value, maxAbs),
+        'label': `${baseLabel}\n${value.toFixed(3)}`,
+        'text-wrap': 'wrap',
+        'text-valign': 'bottom',
+        'text-margin-y': 10,
+      });
+    });
+  }
+
+  function applyGraphCurvatureStyles() {
+    // Graph-level methods do not colour nodes or edges. Their numerical range
+    // is still shown in the statistics panel.
+    const values = [];
+    cy.nodes().forEach((node) => {
+      const value = Number(node.data('curvature'));
+      if (Number.isFinite(value)) values.push(value);
+    });
+    updateCurvatureStats(values);
+  }
+
+  function applyCurvatureStyles(target = selectedMethod().target) {
+    resetCurvatureStyles();
+
+    if (target === 'edges') {
+      applyEdgeCurvatureStyles();
+      return;
+    }
+    if (target === 'nodes') {
+      applyNodeCurvatureStyles();
       return;
     }
 
-    const alpha = Number(alphaInput.value);
-    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
-      setStatus('α must be between 0 and 1.', 'error');
+    updateCurvatureStats([]);
+  }
+
+  function renderCurvatureResult(data) {
+    const target = data.curvature?.target;
+    const values = Array.isArray(data.values) ? data.values : [];
+
+    clearCurvatureData();
+    resetCurvatureStyles();
+
+    if (target === 'edges') {
+      values.forEach((item) => {
+        const edge = cy.getElementById(String(item.id));
+        if (edge.length) edge.data('curvature', Number(item.value));
+      });
+      applyEdgeCurvatureStyles();
+      return;
+    }
+
+    if (target === 'nodes') {
+      values.forEach((item) => {
+        const node = cy.getElementById(String(item.id));
+        if (node.length) node.data('curvature', Number(item.value));
+      });
+      applyNodeCurvatureStyles();
+      return;
+    }
+
+    if (target === 'graph') {
+      graphCurvatureValues = values
+        .map((item) => ({ id: String(item.id), value: Number(item.value) }))
+        .filter((item) => Number.isFinite(item.value));
+      const numbers = graphCurvatureValues.map((item) => item.value);
+      updateCurvatureStats(numbers);
+      return;
+    }
+
+    throw new Error(`Unsupported curvature target: ${target}`);
+  }
+
+  async function computeCurvature() {
+    const method = selectedMethod();
+
+    if (method.target === 'edges' && !cy.edges().length) {
+      setStatus(`${method.name} needs at least one edge.`, 'error');
+      return;
+    }
+    if (method.target === 'nodes' && !cy.nodes().length) {
+      setStatus(`${method.name} needs at least one vertex.`, 'error');
+      return;
+    }
+
+    let parameters;
+    try {
+      parameters = readParameterControls();
+      parameterState.set(method.id, parameters);
+    } catch (error) {
+      setStatus(error.message, 'error');
       return;
     }
 
     const payload = {
-      alpha,
+      curvature: method.id,
+      parameters,
       nodes: cy.nodes().map((node) => ({ id: node.id() })),
       edges: cy.edges().map((edge) => ({
         id: edge.id(),
@@ -380,7 +802,8 @@
       })),
     };
 
-    setStatus('Computing Ollivier–Ricci curvature…');
+    const requestedMethod = method.id;
+    setStatus(`Computing ${method.name}…`);
 
     try {
       const response = await fetch('/api/curvature', {
@@ -394,27 +817,41 @@
         throw new Error(data.detail || data.error || 'Unknown error');
       }
 
-      data.edges.forEach((item) => {
-        const edge = cy.getElementById(String(item.id));
-        if (!edge.length) return;
-        edge.data('curvature', Number(item.curvature));
-      });
+      if (selectedCurvature !== requestedMethod) {
+        setStatus('The curvature type changed while the calculation was running; result ignored.');
+        return;
+      }
 
-      applyCurvatureStyles();
+      renderCurvatureResult(data);
       syncJsonFromGraph();
-      setStatus('Curvature updated.', 'success');
+      setStatus(`${method.name} updated.`, 'success');
     } catch (error) {
       setStatus(`Error: ${error.message}`, 'error');
     }
   }
 
   function graphAsObject() {
+    const method = selectedMethod();
+    let parameters = parameterState.get(method.id) || parameterDefaults(method);
+    try {
+      parameters = readParameterControls();
+    } catch (_) {
+      // Keep the last valid parameter state in exported JSON.
+    }
+
     return {
-      version: 1,
-      alpha: Number(alphaInput.value),
+      version: 2,
+      curvature: {
+        type: method.id,
+        target: method.target,
+        parameters,
+        ...(method.target === 'graph' && graphCurvatureValues.length
+          ? { values: graphCurvatureValues }
+          : {}),
+      },
       nodes: cy.nodes().map((node) => {
         const position = node.position();
-        return {
+        const result = {
           id: node.id(),
           label: String(node.data('label') ?? node.id()),
           position: {
@@ -422,6 +859,13 @@
             y: Number(position.y.toFixed(3)),
           },
         };
+
+        if (method.target === 'nodes') {
+          const value = Number(node.data('curvature'));
+          if (Number.isFinite(value)) result.curvature = value;
+        }
+
+        return result;
       }),
       edges: cy.edges().map((edge) => {
         const result = {
@@ -429,9 +873,12 @@
           source: String(edge.data('source')),
           target: String(edge.data('target')),
         };
-        const raw = edge.data('curvature');
-        const curvature = raw === null || raw === undefined ? NaN : Number(raw);
-        if (Number.isFinite(curvature)) result.curvature = curvature;
+
+        if (method.target === 'edges') {
+          const value = Number(edge.data('curvature'));
+          if (Number.isFinite(value)) result.curvature = value;
+        }
+
         return result;
       }),
     };
@@ -487,28 +934,49 @@
       pairs.add(pair);
     }
 
-    const alpha = data.alpha === undefined ? Number(alphaInput.value) : Number(data.alpha);
-    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
-      throw new Error('alpha must be a number between 0 and 1.');
+    // Version 1 compatibility: old exports stored alpha at the root and had no
+    // curvature metadata. They are interpreted as Ollivier-Ricci graphs.
+    const methodId = String(data.curvature?.type ?? data.curvatureType ?? 'ollivier');
+    const method = getMethod(methodId);
+    if (!method) throw new Error(`Unknown curvature method: ${methodId}`);
+    if (!method.available) throw new Error(`${method.name} is not implemented yet.`);
+
+    const parameters = {
+      ...(data.curvature?.parameters || {}),
+    };
+    if (data.alpha !== undefined && parameters.alpha === undefined) {
+      parameters.alpha = data.alpha;
     }
 
-    return alpha;
+    return {
+      methodId,
+      parameters: validateParameters(method, parameters),
+    };
   }
 
   function loadGraphData(data, options = {}) {
     const {
-      alpha = Number(alphaInput.value),
+      methodId = selectedCurvature,
+      parameters = parameterState.get(methodId) || parameterDefaults(getMethod(methodId) || selectedMethod()),
       fit = true,
       statusMessage = 'Graph loaded.',
       jsonMessage = 'JSON synchronized with the graph.',
     } = options;
+
+    const method = getMethod(methodId) || selectedMethod();
 
     gesture = null;
     endEdgePreview();
     endSelectionBox();
     cy.elements().remove();
     clearChosen();
-    alphaInput.value = String(alpha);
+
+    selectCurvature(method.id, {
+      invalidate: false,
+      parameters,
+      syncJson: false,
+      announce: false,
+    });
 
     const hasAllPositions = data.nodes.every(
       (node) => Number.isFinite(Number(node.position?.x)) && Number.isFinite(Number(node.position?.y))
@@ -519,36 +987,56 @@
         ? { x: Number(node.position.x), y: Number(node.position.y) }
         : { x: 180 + (index % 5) * 120, y: 150 + Math.floor(index / 5) * 110 };
 
+      const elementData = {
+        id: String(node.id),
+        label: String(node.label ?? node.id),
+      };
+
+      if (method.target === 'nodes' && Number.isFinite(Number(node.curvature))) {
+        elementData.curvature = Number(node.curvature);
+      }
+
       cy.add({
         group: 'nodes',
-        data: {
-          id: String(node.id),
-          label: String(node.label ?? node.id),
-        },
+        data: elementData,
         position,
         grabbable: false,
       });
     });
 
     data.edges.forEach((edge) => {
-      const hasCurvature = edge.curvature !== undefined
-        && edge.curvature !== null
-        && Number.isFinite(Number(edge.curvature));
+      const elementData = {
+        id: String(edge.id),
+        source: String(edge.source),
+        target: String(edge.target),
+      };
+
+      if (method.target === 'edges' && Number.isFinite(Number(edge.curvature))) {
+        elementData.curvature = Number(edge.curvature);
+      }
 
       cy.add({
         group: 'edges',
-        data: {
-          id: String(edge.id),
-          source: String(edge.source),
-          target: String(edge.target),
-          curvature: hasCurvature ? Number(edge.curvature) : null,
-        },
+        data: elementData,
       });
     });
 
+    if (method.target === 'graph' && Array.isArray(data.curvature?.values)) {
+      graphCurvatureValues = data.curvature.values
+        .map((item) => ({ id: String(item.id), value: Number(item.value) }))
+        .filter((item) => Number.isFinite(item.value));
+    } else {
+      graphCurvatureValues = [];
+    }
+
     refreshCountersFromIds();
     updateCounts();
-    applyCurvatureStyles();
+    if (method.target === 'graph') {
+      updateCurvatureStats(graphCurvatureValues.map((item) => item.value));
+      resetCurvatureStyles();
+    } else {
+      applyCurvatureStyles(method.target);
+    }
     if (fit && cy.elements().length) cy.fit(undefined, 70);
     jsonDirty = false;
     syncJsonFromGraph(true);
@@ -559,9 +1047,9 @@
   function importJson() {
     try {
       const data = JSON.parse(jsonTextarea.value);
-      const alpha = validateImport(data);
+      const importOptions = validateImport(data);
       loadGraphData(data, {
-        alpha,
+        ...importOptions,
         statusMessage: 'Graph imported.',
         jsonMessage: 'JSON imported successfully.',
       });
@@ -583,7 +1071,7 @@
 
   function graphFromPairs(nodeCount, pairs, positions = circlePositions(nodeCount)) {
     return {
-      version: 1,
+      version: 2,
       nodes: Array.from({ length: nodeCount }, (_, index) => ({
         id: `v${index + 1}`,
         label: String(index + 1),
@@ -681,8 +1169,7 @@
       pairs.push([i, i + 5]);
     }
 
-    const innerStar = [[6, 8], [8, 10], [10, 7], [7, 9], [9, 6]];
-    pairs.push(...innerStar);
+    pairs.push([6, 8], [8, 10], [10, 7], [7, 9], [9, 6]);
     return graphFromPairs(10, pairs, positions);
   }
 
@@ -725,10 +1212,18 @@
   ];
 
   function loadPreset(preset) {
-    const data = preset.build();
-    loadGraphData(data, {
-      alpha: Number(alphaInput.value),
-      statusMessage: `${preset.name} loaded. Press R to compute curvature.`,
+    const method = selectedMethod();
+    let parameters = parameterState.get(method.id) || parameterDefaults(method);
+    try {
+      parameters = readParameterControls();
+    } catch (_) {
+      // Keep last valid values.
+    }
+
+    loadGraphData(preset.build(), {
+      methodId: method.id,
+      parameters,
+      statusMessage: `${preset.name} loaded. Press R to compute ${method.short_name || method.name}.`,
       jsonMessage: `JSON updated for ${preset.name}.`,
     });
   }
@@ -945,16 +1440,6 @@
     setStatus('Position updated. Moving vertices does not change graph curvature.');
   });
 
-  alphaInput.addEventListener('change', () => {
-    const alpha = Number(alphaInput.value);
-    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
-      setStatus('α must be between 0 and 1.', 'error');
-      return;
-    }
-    invalidateCurvature('α changed. Press R to recalculate.');
-    syncJsonFromGraph();
-  });
-
   jsonTextarea.addEventListener('input', () => {
     jsonDirty = true;
     setJsonStatus('JSON edited. Press Ctrl+Enter to import it.');
@@ -979,6 +1464,11 @@
     }
 
     if (event.key === 'Escape') {
+      if (!curvatureMenu.hidden) {
+        closeCurvatureMenu();
+        curvatureTitle.focus();
+        return;
+      }
       clearChosen();
       setStatus('Selection cleared.');
       return;
@@ -986,14 +1476,21 @@
 
     if (event.key.toLowerCase() === 'r') {
       event.preventDefault();
-      updateCurvature();
+      computeCurvature();
     }
   });
 
   cy.on('add remove', updateCounts);
 
-  renderPresetCollection();
-  updateCounts();
-  syncJsonFromGraph(true);
-  setStatus('Click the canvas to create a vertex, or load a known graph from the collection.');
+  async function initialize() {
+    renderPresetCollection();
+    updateCounts();
+    await loadCurvatureCatalog();
+    syncJsonFromGraph(true);
+    setStatus('Click the canvas to create a vertex, or load a known graph from the collection.');
+  }
+
+  initialize().catch((error) => {
+    setStatus(`Initialization error: ${error.message}`, 'error');
+  });
 })();
