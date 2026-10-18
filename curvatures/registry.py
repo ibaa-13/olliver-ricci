@@ -77,7 +77,7 @@ CURVATURE_METHODS: dict[str, dict[str, Any]] = {
         "short_name": "Bakry-Émery",
         "target": "nodes",
         "description": "Bakry-Émery curvature on graph vertices.",
-        "available": False,
+        "available": True,
         "parameters": [],
         "compute": compute_bakry_emery,
     },
